@@ -84,6 +84,72 @@ async fn shared_auth_process_contract() -> Result<()> {
             auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
         };
         let manager = AuthManager::shared_from_auth_config(config.clone(), true).await?;
+        if action.starts_with("drift-") {
+            let other_root = tempfile::tempdir()?;
+            std::fs::set_permissions(other_root.path(), std::fs::Permissions::from_mode(0o700))?;
+            // This exact-test subprocess owns its environment; no other tests run here.
+            unsafe {
+                std::env::set_var("CODEX_AUTH_HOME", other_root.path());
+            }
+            config
+                .import_auth_json(br#"{"OPENAI_API_KEY":"other-root-key"}"#.as_slice())
+                .await?;
+            let other_manager = AuthManager::shared_from_auth_config(config.clone(), true).await?;
+            let other_path = other_root.path().join("auth.json");
+            let other_bytes = std::fs::read(&other_path)?;
+            if action == "drift-unset" {
+                unsafe {
+                    std::env::remove_var("CODEX_AUTH_HOME");
+                }
+                let mut local_config = config.clone();
+                local_config.auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+                let local_manager =
+                    AuthManager::shared_from_auth_config(local_config, false).await?;
+                unsafe {
+                    std::env::set_var("CODEX_AUTH_HOME", other_root.path());
+                }
+                assert!(!local_manager.uses_shared_auth());
+                assert!(!local_manager.logout().await?);
+                assert_eq!(std::fs::read(&other_path)?, other_bytes);
+                unsafe {
+                    std::env::remove_var("CODEX_AUTH_HOME");
+                }
+            }
+            assert!(manager.uses_shared_auth());
+            assert!(other_manager.uses_shared_auth());
+            assert_eq!(manager.auth().await.unwrap().get_token()?, "access-a");
+            assert_eq!(
+                other_manager.auth().await.unwrap().get_token()?,
+                "other-root-key"
+            );
+            manager.refresh_token().await?;
+            assert_eq!(manager.auth().await.unwrap().get_token()?, "access-drift-1");
+            manager.refresh_token_from_authority().await?;
+            assert_eq!(manager.auth().await.unwrap().get_token()?, "access-drift-2");
+            let stored = read_auth_json(std::fs::File::open(Path::new(&root).join("auth.json"))?)?;
+            assert_eq!(stored.tokens.unwrap().refresh_token, "refresh-drift-2");
+            assert_eq!(std::fs::read(&other_path)?, other_bytes);
+            assert!(manager.logout_with_revoke().await?);
+            assert!(!Path::new(&root).join("auth.json").exists());
+            assert!(manager.auth().await.is_none());
+            write_private(
+                &Path::new(&root).join("auth.json"),
+                br#"{"OPENAI_API_KEY":"original-root-key"}"#,
+            )?;
+            assert_eq!(
+                manager.auth().await.unwrap().get_token()?,
+                "original-root-key"
+            );
+            assert!(manager.logout().await?);
+            assert!(!Path::new(&root).join("auth.json").exists());
+            assert_eq!(std::fs::read(&other_path)?, other_bytes);
+            assert_eq!(
+                other_manager.auth().await.unwrap().get_token()?,
+                "other-root-key"
+            );
+            assert!(!home.path().join("auth.json").exists());
+            return Ok(());
+        }
         if action == "reload" {
             let first = manager.auth().await.context("shared auth should load")?;
             assert_eq!(first.get_account_id().as_deref(), Some("account-a"));
@@ -164,6 +230,48 @@ async fn shared_auth_process_contract() -> Result<()> {
     };
     join_child(spawn("reload")?)?;
     write_private(&auth_path, &payload("account-a", "access-a", "refresh-a"))?;
+    for action in ["drift-b", "drift-unset"] {
+        let child = spawn(action)?;
+        for (index, token) in ["refresh-a", "refresh-drift-1"].into_iter().enumerate() {
+            let mut request = server
+                .recv_timeout(Duration::from_secs(20))?
+                .context("drift refresh request")?;
+            assert_eq!(request.url(), "/oauth/token");
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body)?;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body)?["refresh_token"],
+                token
+            );
+            let generation = index + 1;
+            request.respond(
+                tiny_http::Response::from_string(
+                    json!({
+                        "access_token": format!("access-drift-{generation}"),
+                        "refresh_token": format!("refresh-drift-{generation}"),
+                    })
+                    .to_string(),
+                )
+                .with_header(
+                    tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
+                ),
+            )?;
+        }
+        let mut request = server
+            .recv_timeout(Duration::from_secs(20))?
+            .context("drift revoke request")?;
+        assert_eq!(request.url(), "/oauth/revoke");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body)?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body)?["token"],
+            "refresh-drift-2"
+        );
+        request.respond(tiny_http::Response::empty(200))?;
+        join_child(child)?;
+        assert!(server.try_recv()?.is_none());
+        write_private(&auth_path, &payload("account-a", "access-a", "refresh-a"))?;
+    }
     let first = spawn("first")?;
     wait_ready(&control.path().join("first.ready"))?;
     std::fs::write(control.path().join("first.go"), b"")?;

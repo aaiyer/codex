@@ -247,7 +247,13 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
         Box::pin(async move {
             let auth = self.auth().await;
-            resolve_provider_auth(auth.as_ref(), self.info())
+            resolve_provider_auth(
+                auth.as_ref(),
+                self.info(),
+                self.auth_manager()
+                    .as_ref()
+                    .is_some_and(|manager| manager.uses_shared_auth()),
+            )
         })
     }
 

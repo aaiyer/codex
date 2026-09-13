@@ -175,7 +175,13 @@ impl AmazonBedrockModelProvider {
         let source = self.auth_source();
         if source == auth::BedrockAuthSource::CommandBearerToken {
             let auth = self.auth().await;
-            return resolve_configured_provider_auth(auth.as_ref(), &self.info);
+            return resolve_configured_provider_auth(
+                auth.as_ref(),
+                &self.info,
+                self.auth_manager
+                    .as_ref()
+                    .is_some_and(|manager| manager.uses_shared_auth()),
+            );
         }
 
         let managed_auth = self.managed_auth();

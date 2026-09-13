@@ -84,7 +84,13 @@ impl OpenAiModelsEndpoint {
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let mut api_provider = self.provider_info.to_api_provider(auth_mode)?;
         enforce_managed_residency(&mut api_provider);
-        let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)?;
+        let api_auth = resolve_provider_auth(
+            auth.as_ref(),
+            &self.provider_info,
+            self.auth_manager
+                .as_ref()
+                .is_some_and(|manager| manager.uses_shared_auth()),
+        )?;
         let request_url =
             ModelsClient::<ReqwestTransport>::request_url(&api_provider, client_version);
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());

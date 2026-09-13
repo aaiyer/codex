@@ -204,8 +204,9 @@ pub(crate) fn auth_manager_for_provider(
 pub(crate) fn resolve_provider_auth(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
+    uses_shared_auth: bool,
 ) -> codex_protocol::error::Result<SharedAuthProvider> {
-    let shared = std::env::var_os("CODEX_AUTH_HOME").is_some() && provider.requires_openai_auth;
+    let shared = uses_shared_auth && provider.requires_openai_auth;
     if !shared && let Some(auth) = bearer_auth_for_provider(provider)? {
         return Ok(Arc::new(auth));
     }
@@ -240,6 +241,9 @@ pub(crate) async fn resolve_provider_auth_for_scope(
     provider: &ModelProviderInfo,
     scope: ProviderAuthScope,
 ) -> codex_protocol::error::Result<ResolvedProviderAuth> {
+    let uses_shared_auth = auth_manager
+        .as_ref()
+        .is_some_and(|manager| manager.uses_shared_auth());
     let ProviderAuthScope {
         agent_identity_policy,
         session_source,
@@ -254,11 +258,13 @@ pub(crate) async fn resolve_provider_auth_for_scope(
     if !should_bootstrap_chatgpt_agent_identity(agent_identity_policy, auth)
         || agent_identity_session_fallback.is_engaged()
     {
-        return resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new);
+        return resolve_provider_auth(auth, provider, uses_shared_auth)
+            .map(ResolvedProviderAuth::new);
     }
 
     let Some(auth_manager) = auth_manager else {
-        return resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new);
+        return resolve_provider_auth(auth, provider, uses_shared_auth)
+            .map(ResolvedProviderAuth::new);
     };
 
     match auth_manager
@@ -268,7 +274,9 @@ pub(crate) async fn resolve_provider_auth_for_scope(
         Ok(Some(agent_identity_auth)) => Ok(ResolvedProviderAuth::for_agent_identity(
             agent_identity_auth,
         )),
-        Ok(None) => resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new),
+        Ok(None) => {
+            resolve_provider_auth(auth, provider, uses_shared_auth).map(ResolvedProviderAuth::new)
+        }
         Err(err) => {
             if let Some(AgentIdentityAuthError::BootstrapUnavailable {
                 operation,
@@ -286,7 +294,8 @@ pub(crate) async fn resolve_provider_auth_for_scope(
                     newly_engaged,
                     "agent identity bootstrap unavailable; using ChatGPT bearer auth for this session"
                 );
-                resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new)
+                resolve_provider_auth(auth, provider, uses_shared_auth)
+                    .map(ResolvedProviderAuth::new)
             } else {
                 Err(err.into())
             }
@@ -485,7 +494,8 @@ mod tests {
     fn unauthenticated_auth_provider_adds_no_headers() {
         let provider =
             create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
-        let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
+        let auth =
+            resolve_provider_auth(/*auth*/ None, &provider, false).expect("auth should resolve");
 
         assert!(auth.to_auth_headers().is_empty());
     }
@@ -505,8 +515,8 @@ mod tests {
         );
         let ambient_auth = CodexAuth::Headers(AuthHeaders::new(ambient_headers));
 
-        let auth =
-            resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+        let auth = resolve_provider_auth(Some(&ambient_auth), &provider, false)
+            .expect("auth should resolve");
 
         assert!(auth.to_auth_headers().is_empty());
     }
@@ -520,8 +530,8 @@ mod tests {
             region: "us-east-1".to_string(),
         });
 
-        let auth =
-            resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+        let auth = resolve_provider_auth(Some(&ambient_auth), &provider, false)
+            .expect("auth should resolve");
 
         assert!(auth.to_auth_headers().is_empty());
     }
@@ -536,7 +546,7 @@ mod tests {
             region: "us-east-1".to_string(),
         });
 
-        let headers = resolve_provider_auth(Some(&ambient_auth), &provider)
+        let headers = resolve_provider_auth(Some(&ambient_auth), &provider, false)
             .expect("auth should resolve")
             .to_auth_headers();
 
@@ -545,6 +555,30 @@ mod tests {
             Some(&HeaderValue::from_static("Bearer provider-token"))
         );
         assert_eq!(headers.len(), 1);
+    }
+
+    #[test]
+    fn shared_provider_selection_uses_the_callers_authority() {
+        let mut provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        provider.requires_openai_auth = true;
+        provider.experimental_bearer_token = Some("provider-token".into());
+        let auth = CodexAuth::from_api_key("shared-token");
+        let headers = resolve_provider_auth(Some(&auth), &provider, true)
+            .unwrap()
+            .to_auth_headers();
+        assert_eq!(
+            headers.get(AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer shared-token"))
+        );
+        assert!(resolve_provider_auth(None, &provider, true).is_err());
+        let headers = resolve_provider_auth(Some(&auth), &provider, false)
+            .unwrap()
+            .to_auth_headers();
+        assert_eq!(
+            headers.get(AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer provider-token"))
+        );
     }
 
     #[test]
@@ -563,7 +597,7 @@ mod tests {
         });
         let command_auth = CodexAuth::from_api_key("command-token");
 
-        let headers = resolve_provider_auth(Some(&command_auth), &provider)
+        let headers = resolve_provider_auth(Some(&command_auth), &provider, false)
             .expect("auth should resolve")
             .to_auth_headers();
 
@@ -587,8 +621,8 @@ mod tests {
         );
         let ambient_auth = CodexAuth::Headers(AuthHeaders::new(expected.clone()));
 
-        let auth =
-            resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+        let auth = resolve_provider_auth(Some(&ambient_auth), &provider, false)
+            .expect("auth should resolve");
 
         assert_eq!(auth.to_auth_headers(), expected);
     }
@@ -616,7 +650,7 @@ mod tests {
             region: "us-east-1".to_string(),
         });
 
-        match resolve_provider_auth(Some(&auth), &provider) {
+        match resolve_provider_auth(Some(&auth), &provider, false) {
             Err(err) => match err.details() {
                 CodexErrorDetails::UnsupportedOperation(message) => {
                     assert_eq!(message, BEDROCK_API_KEY_UNSUPPORTED_MESSAGE);

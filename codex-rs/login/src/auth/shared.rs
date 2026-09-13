@@ -13,9 +13,18 @@ pub fn shared_auth_enabled(mode: AuthCredentialsStoreMode) -> bool {
     mode != AuthCredentialsStoreMode::Ephemeral && std::env::var_os("CODEX_AUTH_HOME").is_some()
 }
 
-pub(super) fn storage() -> Arc<dyn AuthStorageBackend> {
+pub(super) fn selected_storage(
+    mode: AuthCredentialsStoreMode,
+) -> Option<Arc<dyn AuthStorageBackend>> {
+    if mode == AuthCredentialsStoreMode::Ephemeral {
+        return None;
+    }
+    std::env::var_os("CODEX_AUTH_HOME").map(|root| storage_at(PathBuf::from(root)))
+}
+
+fn storage_at(root: PathBuf) -> Arc<dyn AuthStorageBackend> {
     Arc::new(SharedAuthStorage {
-        root: PathBuf::from(std::env::var_os("CODEX_AUTH_HOME").unwrap_or_default()),
+        root,
         #[cfg(target_os = "linux")]
         lease: None,
     })

@@ -58,6 +58,10 @@ Keep the complete extracted package together, including `bin/`,
 Check `bin/codex --version` against the selected release. GitHub's release asset
 API also supplies each asset's `sha256:` digest for automated installers.
 
+The musl target names describe the native Codex build. Upstream's bundled zsh
+requires host glibc on both architectures; its ARM64 ripgrep also requires host
+glibc. The release workflow qualifies these helpers on Ubuntu 24.04.
+
 The [fork release workflow](.github/workflows/aaiyer-release.yml) runs only in
 `aaiyer/codex` when a `rust-vX.Y.Z+aaiyer.N` tag is pushed. It uses public
 `ubuntu-24.04` and `ubuntu-24.04-arm` runners, Rust 1.95.0, Zig 0.14.0, and

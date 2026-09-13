@@ -378,6 +378,7 @@ async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -568,6 +569,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
     )?;
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -651,6 +653,7 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
 
     let reloaded = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -694,6 +697,7 @@ async fn chatgpt_auth_retries_transient_agent_identity_registration() -> anyhow:
     )?;
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -761,6 +765,7 @@ async fn chatgpt_auth_registration_retry_exhaustion_is_fallback_eligible() -> an
     )?;
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -823,6 +828,7 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
     storage.save(&auth_json)?;
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -880,6 +886,7 @@ async fn chatgpt_auth_non_retryable_registration_error_is_hard_failure() -> anyh
     )?;
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -1026,6 +1033,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -1090,6 +1098,7 @@ async fn loads_api_key_from_auth_json() {
 
     let auth = super::load_auth(
         dir.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -1188,6 +1197,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -1212,6 +1222,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     let updated_auth = CodexAuth::from_auth_dot_json(
         codex_home.path(),
         updated_auth_dot_json,
+        None,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
@@ -2005,6 +2016,7 @@ async fn load_auth_reads_access_token_from_env() {
     let chatgpt_base_url = format!("{authapi_base_url}/backend-api");
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -2054,6 +2066,7 @@ async fn load_auth_reads_personal_access_token_from_env() {
     ] {
         let auth = super::load_auth(
             codex_home.path(),
+            /*shared_storage*/ None,
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
             /*allowed_login_methods*/ None,
@@ -2228,6 +2241,7 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ true,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -2917,6 +2931,7 @@ async fn plan_type_maps_known_plan() {
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -2950,6 +2965,7 @@ async fn plan_type_maps_self_serve_business_usage_based_plan() {
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -2986,6 +3002,7 @@ async fn plan_type_maps_enterprise_cbp_usage_based_plan() {
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -3022,6 +3039,7 @@ async fn plan_type_maps_unknown_to_unknown() {
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,
@@ -3055,6 +3073,7 @@ async fn missing_plan_type_maps_to_unknown() {
 
     let auth = super::load_auth(
         codex_home.path(),
+        /*shared_storage*/ None,
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*allowed_login_methods*/ None,

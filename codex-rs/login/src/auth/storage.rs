@@ -507,9 +507,17 @@ pub(super) fn create_auth_storage(
     mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Arc<dyn AuthStorageBackend> {
-    if super::shared::shared_auth_enabled(mode) {
-        return super::shared::storage();
+    if let Some(storage) = super::shared::selected_storage(mode) {
+        return storage;
     }
+    create_local_auth_storage(codex_home, mode, keyring_backend_kind)
+}
+
+pub(super) fn create_local_auth_storage(
+    codex_home: PathBuf,
+    mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> Arc<dyn AuthStorageBackend> {
     let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
     create_auth_storage_with_store(codex_home, mode, keyring_store, keyring_backend_kind)
 }
