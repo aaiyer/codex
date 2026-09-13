@@ -1349,3 +1349,118 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 0);
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn shared_websocket_generation_stays_bound_to_resolved_credentials() -> anyhow::Result<()> {
+    if std::env::var_os("CODEX_SHARED_WS_SNAPSHOT_TEST").is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir()?;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))?;
+        let mut command = tokio::process::Command::new(std::env::current_exe()?);
+        command
+            .arg("--exact")
+            .arg("client::tests::shared_websocket_generation_stays_bound_to_resolved_credentials")
+            .arg("--nocapture")
+            .env("CODEX_SHARED_WS_SNAPSHOT_TEST", "1")
+            .env("CODEX_AUTH_HOME", root.path())
+            .kill_on_drop(true);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(30), command.status())
+                .await??
+                .success()
+        );
+        return Ok(());
+    }
+    let home = tempfile::tempdir()?;
+    codex_login::login_with_api_key(
+        home.path(),
+        "key-a",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    let manager = AuthManager::shared(
+        home.path().to_path_buf(),
+        false,
+        AuthCredentialsStoreMode::File,
+        None,
+        None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+    let server =
+        core_test_support::responses::start_websocket_server(vec![vec![vec![]], vec![vec![]]])
+            .await;
+    let mut provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
+    provider.supports_websockets = true;
+    let mut client = test_model_client(SessionSource::Exec);
+    Arc::get_mut(&mut client.state).unwrap().provider =
+        create_model_provider(provider, Some(manager.clone()));
+    let setup_a = client.current_client_setup().await?;
+    let generation_a = setup_a.auth_owner_generation;
+    // API keys lack complete account/user identity: changed credentials must conservatively reset.
+    codex_login::login_with_api_key(
+        home.path(),
+        "key-b",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    manager.reload().await;
+    assert_ne!(
+        generation_a,
+        Some(
+            manager
+                .auth_change_state_receiver()
+                .borrow()
+                .owner_generation
+        )
+    );
+    let metadata = test_responses_metadata_for_client(
+        &client,
+        None,
+        "window".into(),
+        None,
+        TestCodexResponsesRequestKind::WebsocketConnection,
+    );
+    let telemetry = test_session_telemetry();
+    let mut session = client.new_session();
+    session.reconcile_shared_auth_owner(setup_a.auth_owner_generation);
+    let context = AuthRequestTelemetryContext::new(
+        setup_a.auth.as_ref().map(CodexAuth::auth_mode),
+        setup_a.api_auth.as_ref(),
+        setup_a.agent_identity_telemetry.clone(),
+        PendingUnauthorizedRetry::default(),
+    );
+    session
+        .websocket_connection(super::WebsocketConnectParams {
+            session_telemetry: &telemetry,
+            api_provider: setup_a.api_provider,
+            api_auth: setup_a.api_auth,
+            responses_metadata: &metadata,
+            auth_context: context,
+            request_route_telemetry: super::RequestRouteTelemetry::for_endpoint(
+                ResponsesEndpoint::Responses.path(),
+            ),
+            endpoint: ResponsesEndpoint::Responses,
+        })
+        .await?;
+    assert_eq!(
+        server.single_handshake().header("authorization"),
+        Some("Bearer key-a".into())
+    );
+    session.turn_state.set("routing-a".into()).unwrap();
+    session
+        .preconnect_websocket(&test_model_info(), &telemetry, &metadata)
+        .await?;
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 2);
+    assert_eq!(
+        handshakes[1].header("authorization"),
+        Some("Bearer key-b".into())
+    );
+    assert!(session.turn_state.get().is_none());
+    server.shutdown().await;
+    Ok(())
+}

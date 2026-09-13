@@ -1,0 +1,232 @@
+name: aaiyer fork release
+
+on:
+  push:
+    tags:
+      - 'rust-v*.*.*\+aaiyer.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aaiyer-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'aaiyer/codex'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    outputs:
+      fork_commit: ${{ steps.provenance.outputs.fork_commit }}
+      fork_tag_object: ${{ steps.provenance.outputs.fork_tag_object }}
+      upstream_tag: ${{ steps.provenance.outputs.upstream_tag }}
+      upstream_commit: ${{ steps.provenance.outputs.upstream_commit }}
+    env:
+      TARGET: ${{ matrix.target }}
+      CODEX_REPO_ROOT: ${{ github.workspace }}
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        id: python
+        with:
+          python-version: "3.12.9"
+      - name: Bind stable upstream release, source and fork version
+        id: provenance
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_TYPE" == tag ]]
+          [[ "$GITHUB_REF_NAME" =~ ^rust-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\+aaiyer\.[1-9][0-9]*$ ]]
+          # Annotated tag events may identify the tag object rather than its commit.
+          fork_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          fork_tag_object="$(git rev-parse "refs/tags/$GITHUB_REF_NAME")"
+          [[ "$GITHUB_SHA" == "$fork_tag_object" || "$GITHUB_SHA" == "$fork_commit" ]]
+          [[ "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")" == "$fork_commit" ]]
+          [[ "$(git rev-parse HEAD)" == "$fork_commit" ]]
+          "$PYTHON" - <<'PYTHON' > "$RUNNER_TEMP/provenance.json"
+          import json
+          import pathlib
+          import tomllib
+          workspace = tomllib.loads(pathlib.Path("codex-rs/Cargo.toml").read_text())["workspace"]
+          upstream = workspace["metadata"]["aaiyer"]
+          print(json.dumps({
+              "version": workspace["package"]["version"],
+              "upstream-tag": upstream["upstream-tag"],
+              "upstream-commit": upstream["upstream-commit"],
+          }))
+          PYTHON
+          version="$(jq -er '.version' "$RUNNER_TEMP/provenance.json")"
+          upstream_tag="$(jq -er '.["upstream-tag"]' "$RUNNER_TEMP/provenance.json")"
+          upstream_commit="$(jq -er '.["upstream-commit"]' "$RUNNER_TEMP/provenance.json")"
+          [[ "$upstream_tag" =~ ^rust-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$upstream_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_REF_NAME" == "rust-v$version" ]]
+          [[ "$version" == "${upstream_tag#rust-v}+aaiyer."* ]]
+          gh api "repos/openai/codex/releases/tags/$upstream_tag" | jq -e --arg tag "$upstream_tag" \
+            '.tag_name == $tag and .draft == false and .prerelease == false'
+          git ls-remote https://github.com/openai/codex.git \
+            "refs/tags/$upstream_tag" "refs/tags/$upstream_tag^{}" > "$RUNNER_TEMP/upstream-ref"
+          observed_tag="$(awk -v ref="refs/tags/$upstream_tag" '$2 == ref {print $1}' "$RUNNER_TEMP/upstream-ref")"
+          observed_commit="$(awk -v ref="refs/tags/$upstream_tag^{}" '$2 == ref {print $1}' "$RUNNER_TEMP/upstream-ref")"
+          [[ "$observed_tag" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${observed_commit:-$observed_tag}" == "$upstream_commit" ]]
+          git fetch --no-tags https://github.com/openai/codex.git \
+            "refs/tags/$upstream_tag:refs/aaiyer/upstream-base"
+          [[ "$(git rev-parse refs/aaiyer/upstream-base)" == "$observed_tag" ]]
+          [[ "$(git rev-parse 'refs/aaiyer/upstream-base^{commit}')" == "$upstream_commit" ]]
+          git merge-base --is-ancestor "$upstream_commit" "$fork_commit"
+          echo "FORK_VERSION=$version" >> "$GITHUB_ENV"
+          echo "STABLE_GIT_COMMIT=$fork_commit" >> "$GITHUB_ENV"
+          echo "fork_commit=$fork_commit" >> "$GITHUB_OUTPUT"
+          echo "fork_tag_object=$fork_tag_object" >> "$GITHUB_OUTPUT"
+          echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
+          echo "upstream_commit=$upstream_commit" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+      - name: Install musl build tools
+        run: bash .github/scripts/install-musl-build-tools.sh
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just@1.51.0,cargo-nextest@0.9.103
+      - name: Verify V8 resources and package tests
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m unittest discover -s scripts/codex_package -p 'test_*.py'
+          "$PYTHON" - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, "scripts")
+          from codex_package.targets import TARGET_SPECS
+          from codex_package.v8 import resolve_codex_v8_cargo_env
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              for key, value in resolve_codex_v8_cargo_env(TARGET_SPECS[os.environ["TARGET"]]).items():
+                  output.write(f"{key}={value}\n")
+          PY
+      - name: Build and bind bundled sandbox
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "$TARGET" --bin bwrap
+          strip --strip-debug --strip-unneeded "target/$TARGET/release/bwrap"
+          echo "CODEX_BWRAP_SHA256=$(sha256sum "target/$TARGET/release/bwrap" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+      - name: Test fork packages
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          just --shell "$PYTHON" --shell-arg -c \
+            --shell-arg 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")' \
+            --set python "$PYTHON" test --locked --release --target "$TARGET" \
+            -p codex-login -p codex-model-provider -p codex-cli -p codex-otel -p codex-core -p codex-app-server \
+            -E 'package(codex-login) | package(codex-model-provider) | package(codex-cli) | package(codex-otel) | (package(codex-core) & (test(client_websockets) | test(client::tests::shared_websocket_generation_stays_bound_to_resolved_credentials))) | (package(codex-app-server) & test(account_read_reloads_shared_replacement_and_logout_without_oauth))'
+      - name: Build release binaries
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "$TARGET" --bin codex --bin codex-code-mode-host
+          strip --strip-debug --strip-unneeded "target/$TARGET/release/codex" "target/$TARGET/release/codex-code-mode-host"
+      - name: Package and smoke test exact release bytes
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          binaries="codex-rs/target/$TARGET/release"
+          archive="dist/codex-package-$TARGET.tar.gz"
+          "$PYTHON" scripts/build_codex_package.py --target "$TARGET" --variant codex \
+            --cargo-profile release --entrypoint-bin "$binaries/codex" \
+            --code-mode-host-bin "$binaries/codex-code-mode-host" --bwrap-bin "$binaries/bwrap" \
+            --package-dir "$RUNNER_TEMP/package" --archive-output "$archive"
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/unpacked"
+          package="$RUNNER_TEMP/unpacked"
+          [[ "$("$package/bin/codex" --version)" == "codex-cli $FORK_VERSION" ]]
+          jq -e --arg version "$FORK_VERSION" --arg target "$TARGET" \
+            '.version == $version and .target == $target and .variant == "codex"' "$package/codex-package.json"
+          [[ "$(sha256sum "$package/codex-resources/bwrap" | cut -d ' ' -f 1)" == "$CODEX_BWRAP_SHA256" ]]
+          "$package/codex-resources/bwrap" --version
+          "$package/codex-resources/zsh/bin/zsh" --version
+          "$package/codex-path/rg" --version
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: package-${{ matrix.target }}
+          path: dist/codex-package-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.build.outputs.fork_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - name: Publish fork packages after verifying GitHub asset digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORK_COMMIT: ${{ needs.build.outputs.fork_commit }}
+          FORK_TAG_OBJECT: ${{ needs.build.outputs.fork_tag_object }}
+          UPSTREAM_TAG: ${{ needs.build.outputs.upstream_tag }}
+          UPSTREAM_COMMIT: ${{ needs.build.outputs.upstream_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" == "$FORK_TAG_OBJECT" || "$GITHUB_SHA" == "$FORK_COMMIT" ]]
+          [[ "$(git rev-parse HEAD)" == "$FORK_COMMIT" ]]
+          git fetch --no-tags https://github.com/aaiyer/codex.git \
+            "refs/tags/$GITHUB_REF_NAME:refs/aaiyer/fork-release"
+          [[ "$(git rev-parse refs/aaiyer/fork-release)" == "$FORK_TAG_OBJECT" ]]
+          [[ "$(git rev-parse 'refs/aaiyer/fork-release^{commit}')" == "$FORK_COMMIT" ]]
+          cd dist
+          assets=(codex-package-x86_64-unknown-linux-musl.tar.gz codex-package-aarch64-unknown-linux-musl.tar.gz)
+          sha256sum "${assets[@]}" > SHA256SUMS
+          printf 'aaiyer/codex fork of OpenAI Codex.\n\nSource commit: %s\nVersion: %s\nUpstream: openai/codex %s at %s\n\nLinux musl packages with the maintained shared-auth patches described in README.md. These are fork builds, not OpenAI releases.\n' \
+            "$FORK_COMMIT" "${GITHUB_REF_NAME#rust-v}" "$UPSTREAM_TAG" "$UPSTREAM_COMMIT" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" SHA256SUMS --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --target "$FORK_COMMIT" --draft --title "aaiyer Codex ${GITHUB_REF_NAME#rust-v}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" > "$RUNNER_TEMP/release.json"
+          for asset in "${assets[@]}" SHA256SUMS; do
+            expected="sha256:$(sha256sum "$asset" | cut -d ' ' -f 1)"
+            jq -e --arg name "$asset" --arg digest "$expected" \
+              '[.assets[] | select(.name == $name and .digest == $digest)] | length == 1' "$RUNNER_TEMP/release.json"
+          done
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

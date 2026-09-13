@@ -7,7 +7,10 @@ mod change_state;
 pub mod default_client;
 pub mod error;
 mod personal_access_token;
+mod shared;
 mod storage;
+pub use shared::read_auth_json;
+pub use shared::shared_auth_enabled;
 mod util;
 mod workload_identity;
 

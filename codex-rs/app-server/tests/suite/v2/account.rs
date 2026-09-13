@@ -3221,3 +3221,91 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
     assert_eq!(received, expected);
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn account_read_reloads_shared_replacement_and_logout_without_oauth() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let codex_home = TempDir::new()?;
+    let auth_home = TempDir::new()?;
+    std::fs::set_permissions(auth_home.path(), std::fs::Permissions::from_mode(0o700))?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            ..Default::default()
+        },
+    )?;
+    for home in [codex_home.path(), auth_home.path()] {
+        login_with_api_key(
+            home,
+            "initial-key",
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )?;
+    }
+    let refresh_server = MockServer::start().await;
+    let refresh_endpoint = format!("{}/oauth/token", refresh_server.uri());
+    let auth_home_env = auth_home.path().to_string_lossy();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
+            ("CODEX_AUTH_HOME", Some(auth_home_env.as_ref())),
+            ("CODEX_API_KEY", Some("poison-env-key")),
+            ("OPENAI_API_KEY", None),
+            (
+                REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+                Some(refresh_endpoint.as_str()),
+            ),
+        ])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: Some(Account::ApiKey {}),
+            requires_openai_auth: true,
+        }
+    );
+    write_chatgpt_auth(
+        auth_home.path(),
+        ChatGptAuthFixture::new("replacement-access")
+            .email("replacement@example.com")
+            .plan_type("pro")
+            .refresh_token("must-not-refresh")
+            .last_refresh(Some(Utc::now() - ChronoDuration::days(9))),
+        AuthCredentialsStoreMode::File,
+    )?;
+    std::fs::set_permissions(
+        auth_home.path().join("auth.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )?;
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: Some("replacement@example.com".into()),
+                plan_type: AccountPlanType::Pro
+            }),
+            requires_openai_auth: true,
+        }
+    );
+    std::fs::remove_file(auth_home.path().join("auth.json"))?;
+    assert_eq!(
+        read_account(&mut mcp).await?,
+        GetAccountResponse {
+            account: None,
+            requires_openai_auth: true,
+        }
+    );
+    assert!(
+        refresh_server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    assert!(codex_home.path().join("auth.json").exists());
+    Ok(())
+}

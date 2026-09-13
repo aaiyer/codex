@@ -201,6 +201,28 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     }
 }
 
+pub async fn run_login_with_auth_json(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    if std::io::stdin().is_terminal() {
+        eprintln!("Pipe auth JSON to codex login --with-auth-json, or redirect a file into stdin.");
+        std::process::exit(1);
+    }
+    match config
+        .auth_config()
+        .import_auth_json(std::io::stdin().lock())
+        .await
+    {
+        Ok(()) => {
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            std::process::exit(0);
+        }
+        Err(error) => {
+            eprintln!("Error importing auth: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub async fn run_login_with_api_key(
     cli_config_overrides: CliConfigOverrides,
     api_key: String,
@@ -443,7 +465,9 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    if is_workload_identity_selected() {
+    if is_workload_identity_selected()
+        && !codex_login::auth::shared_auth_enabled(config.cli_auth_credentials_store_mode)
+    {
         match AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await {
             Ok(_) => {
                 eprintln!("Logged in using workload identity");

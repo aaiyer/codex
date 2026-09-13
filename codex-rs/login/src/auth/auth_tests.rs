@@ -3070,3 +3070,121 @@ async fn missing_plan_type_maps_to_unknown() {
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn shared_agent_identity_commit_preserves_current_owner() -> anyhow::Result<()> {
+    if std::env::var_os("CODEX_SHARED_IDENTITY_TEST").is_none() {
+        let root = tempdir()?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))?;
+        let mut command = tokio::process::Command::new(std::env::current_exe()?);
+        command
+            .arg("--exact")
+            .arg("auth::manager::tests::shared_agent_identity_commit_preserves_current_owner")
+            .arg("--nocapture")
+            .env("CODEX_SHARED_IDENTITY_TEST", "1")
+            .env("CODEX_AUTH_HOME", root.path())
+            .kill_on_drop(true);
+        let status =
+            tokio::time::timeout(std::time::Duration::from_secs(30), command.status()).await??;
+        assert!(status.success());
+        return Ok(());
+    }
+    let payload = |account: &str| -> anyhow::Result<AuthDotJson> {
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({"https://api.openai.com/auth": {"chatgpt_account_id":account, "chatgpt_user_id":account}}))?);
+        Ok(crate::auth::read_auth_json(
+            serde_json::to_vec(&json!({"auth_mode":"chatgpt", "tokens": {
+            "id_token":format!("e30.{claims}.signature"), "access_token":account,
+            "refresh_token":"refresh", "account_id":account}}))?
+            .as_slice(),
+        )?)
+    };
+    let record = |account: &str| AgentIdentityAuthRecord {
+        agent_runtime_id: "runtime".into(),
+        agent_private_key: "private".into(),
+        account_id: account.into(),
+        chatgpt_user_id: account.into(),
+        email: None,
+        plan_type: AccountPlanType::Unknown,
+        chatgpt_account_is_fedramp: false,
+        task_id: None,
+    };
+    let storage = create_auth_storage(
+        PathBuf::from("unused"),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    );
+    let cached = Arc::new(Mutex::new(Some(payload("a")?)));
+    let current = payload("b")?;
+    storage.save(&current)?;
+    assert!(persist_agent_identity_record(&cached, &storage, record("a")).is_err());
+    assert_eq!(storage.load()?, Some(current.clone()));
+    persist_agent_identity_record(&cached, &storage, record("b"))?;
+    let mut expected = current;
+    expected.agent_identity = Some(AgentIdentityStorage::Record(record("b")));
+    let server = Arc::new(
+        tiny_http::Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!("{error}"))?,
+    );
+    let endpoint = format!("http://{}/oauth/token", server.server_addr());
+    let _refresh_endpoint = EnvVarGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, &endpoint);
+    let manager = AuthManager::shared(
+        PathBuf::from("unused"),
+        false,
+        AuthCredentialsStoreMode::File,
+        None,
+        None,
+        AuthKeyringBackendKind::default(),
+        crate::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+    let external = Arc::new(FailingExternalAuth {
+        auth: CodexAuth::from_api_key("external"),
+        resolve_count: AtomicUsize::new(0),
+    });
+    assert!(manager.set_external_auth(external.clone()).await.is_err());
+    assert_eq!(external.resolve_count.load(Ordering::SeqCst), 0);
+    assert_eq!(storage.load()?, Some(expected));
+    // The current-thread runtime must still finish the lock-owning HTTP refresh while
+    // a derived-identity writer is queued against the same file and auth state.
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let receiver_server = Arc::clone(&server);
+    let server_thread = std::thread::spawn(move || {
+        let request = receiver_server
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert!(request_tx.send(request).is_ok());
+    });
+    let shared_auth = manager.auth_cached().unwrap();
+    let refreshing = Arc::clone(&manager);
+    let refresh = tokio::spawn(async move { refreshing.refresh_token_from_authority().await });
+    let request = tokio::time::timeout(std::time::Duration::from_secs(10), request_rx).await??;
+    let persist = shared_auth.persist_managed_chatgpt_agent_identity_record(record("b"));
+    let finish_refresh = async move {
+        tokio::task::yield_now().await;
+        request.respond(
+            tiny_http::Response::from_string(
+                r#"{"access_token":"fresh-access","refresh_token":"fresh-refresh"}"#,
+            )
+            .with_header(
+                tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
+            ),
+        )?;
+        refresh.await??;
+        Ok::<(), anyhow::Error>(())
+    };
+    let (persisted, refreshed) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(persist, finish_refresh)
+    })
+    .await?;
+    persisted?;
+    refreshed?;
+    server_thread.join().unwrap();
+    assert_eq!(
+        storage.load()?.unwrap().tokens.unwrap().refresh_token,
+        "fresh-refresh"
+    );
+    Ok(())
+}

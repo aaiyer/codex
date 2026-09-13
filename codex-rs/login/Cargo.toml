@@ -56,3 +56,6 @@ wiremock = { workspace = true }
 
 [lib]
 doctest = false
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true, features = ["fs", "process"] }

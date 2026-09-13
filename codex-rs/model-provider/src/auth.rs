@@ -188,6 +188,13 @@ pub(crate) fn auth_manager_for_provider(
     auth_manager: Option<Arc<AuthManager>>,
     provider: &ModelProviderInfo,
 ) -> Option<Arc<AuthManager>> {
+    if provider.requires_openai_auth
+        && auth_manager
+            .as_ref()
+            .is_some_and(|manager| manager.uses_shared_auth())
+    {
+        return auth_manager;
+    }
     match provider.auth.clone() {
         Some(config) => Some(AuthManager::external_bearer_only(config)),
         None => auth_manager,
@@ -198,7 +205,8 @@ pub(crate) fn resolve_provider_auth(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<SharedAuthProvider> {
-    if let Some(auth) = bearer_auth_for_provider(provider)? {
+    let shared = std::env::var_os("CODEX_AUTH_HOME").is_some() && provider.requires_openai_auth;
+    if !shared && let Some(auth) = bearer_auth_for_provider(provider)? {
         return Ok(Arc::new(auth));
     }
 
@@ -215,6 +223,11 @@ pub(crate) fn resolve_provider_auth(
         ));
     }
 
+    if shared && auth.is_none() {
+        return Err(CodexErr::UnsupportedOperation(
+            "shared authentication is unavailable; log in or import auth JSON".to_string(),
+        ));
+    }
     Ok(match auth {
         Some(auth) => auth_provider_from_auth(auth),
         None => unauthenticated_auth_provider(),

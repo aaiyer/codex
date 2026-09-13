@@ -225,6 +225,7 @@ struct ModelClientState {
 /// Keeping this as a single bundle ensures prewarm and normal request paths
 /// share the same auth/provider setup flow.
 struct CurrentClientSetup {
+    auth_owner_generation: Option<u64>,
     auth: Option<CodexAuth>,
     api_provider: ApiProvider,
     api_auth: SharedAuthProvider,
@@ -300,6 +301,7 @@ struct LastResponse {
 
 #[derive(Debug, Default)]
 struct WebsocketSession {
+    auth_owner_generation: u64,
     connection: Option<ApiWebSocketConnection>,
     endpoint: Option<ResponsesEndpoint>,
     last_request: Option<ResponsesApiRequest>,
@@ -1026,6 +1028,22 @@ impl ModelClient {
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
         let auth = self.state.provider.auth().await;
+        let shared_manager = self
+            .auth_manager()
+            .filter(|manager| manager.uses_shared_auth());
+        let auth_changed = || {
+            CodexErr::UnsupportedOperation(
+                "shared authentication changed during request setup; retry the request".to_string(),
+            )
+        };
+        let auth_state = shared_manager
+            .as_ref()
+            .map(|manager| {
+                manager
+                    .auth_change_state_for(auth.as_ref())
+                    .ok_or_else(auth_changed)
+            })
+            .transpose()?;
         let api_provider = self.state.provider.api_provider().await?;
         let resolved_auth = self
             .state
@@ -1036,7 +1054,13 @@ impl ModelClient {
                 agent_identity_session_fallback: self.state.agent_identity_session_fallback.clone(),
             })
             .await?;
+        if let Some(manager) = shared_manager
+            && manager.auth_change_state_for(auth.as_ref()) != auth_state
+        {
+            return Err(auth_changed());
+        }
         Ok(CurrentClientSetup {
+            auth_owner_generation: auth_state.map(|state| state.owner_generation),
             auth,
             api_provider,
             api_auth: resolved_auth.auth,
@@ -1372,6 +1396,19 @@ impl ModelClientSession {
         Some(incremental_items.to_vec())
     }
 
+    fn reconcile_shared_auth_owner(&mut self, generation: Option<u64>) {
+        let Some(generation) = generation else {
+            return;
+        };
+        if self.websocket_session.auth_owner_generation != generation {
+            self.websocket_session = WebsocketSession {
+                auth_owner_generation: generation,
+                ..Default::default()
+            };
+            self.turn_state = Arc::new(OnceLock::new());
+        }
+    }
+
     fn get_last_response(&mut self) -> Option<LastResponse> {
         self.websocket_session
             .last_response_rx
@@ -1422,15 +1459,15 @@ impl ModelClientSession {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
-        if self.websocket_session.connection.is_some() {
-            return Ok(());
-        }
-
         let client_setup = self.client.current_client_setup().await.map_err(|err| {
             ApiError::Stream(format!(
                 "failed to build websocket prewarm client setup: {err}"
             ))
         })?;
+        self.reconcile_shared_auth_owner(client_setup.auth_owner_generation);
+        if self.websocket_session.connection.is_some() {
+            return Ok(());
+        }
         let auth_context = AuthRequestTelemetryContext::new(
             client_setup.auth.as_ref().map(CodexAuth::auth_mode),
             client_setup.api_auth.as_ref(),
@@ -1560,7 +1597,7 @@ impl ModelClientSession {
         )
     )]
     async fn stream_responses_api(
-        &self,
+        &mut self,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1578,6 +1615,7 @@ impl ModelClientSession {
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
+            self.reconcile_shared_auth_owner(client_setup.auth_owner_generation);
             let endpoint = self
                 .client
                 .responses_endpoint(client_setup.auth.as_ref(), &model_info.slug);
@@ -1745,6 +1783,7 @@ impl ModelClientSession {
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
+            self.reconcile_shared_auth_owner(client_setup.auth_owner_generation);
             let endpoint = self
                 .client
                 .responses_endpoint(client_setup.auth.as_ref(), &model_info.slug);

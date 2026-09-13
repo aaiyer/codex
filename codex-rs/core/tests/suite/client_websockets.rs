@@ -2754,3 +2754,158 @@ async fn stream_until_complete_with_metadata(
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_auth_switch_resets_websocket_owner() {
+    if std::env::var_os("CODEX_SHARED_WS_TEST").is_none() {
+        let root = TempDir::new().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("suite::client_websockets::shared_auth_switch_resets_websocket_owner")
+            .arg("--nocapture")
+            .env("CODEX_SHARED_WS_TEST", "1")
+            .env("CODEX_AUTH_HOME", root.path())
+            .env("CODEX_API_KEY", "poison-key")
+            .kill_on_drop(true);
+        let status = tokio::time::timeout(Duration::from_secs(60), command.status())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    use base64::Engine;
+    let native_auth = |account: &str, access: &str| {
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({"https://api.openai.com/auth": {"chatgpt_account_id":account, "chatgpt_user_id":account}})).unwrap());
+        serde_json::to_vec(&json!({"auth_mode":"chatgpt", "tokens": {
+            "id_token":format!("e30.{claims}.signature"), "access_token":access,
+            "refresh_token":"refresh", "account_id":account}, "last_refresh":chrono::Utc::now()}))
+        .unwrap()
+    };
+    let root = std::path::PathBuf::from(std::env::var_os("CODEX_AUTH_HOME").unwrap());
+    codex_login::save_auth(
+        &root,
+        &codex_login::auth::read_auth_json(native_auth("a", "token-a").as_slice()).unwrap(),
+        codex_config::types::AuthCredentialsStoreMode::File,
+        codex_login::AuthKeyringBackendKind::default(),
+    )
+    .unwrap();
+    let server = start_websocket_server(vec![
+        vec![
+            vec![ev_response_created("a1"), ev_completed("a1")],
+            vec![ev_response_created("a2"), ev_completed("a2")],
+        ],
+        vec![vec![ev_response_created("b1"), ev_completed("b1")]],
+    ])
+    .await;
+    let mut harness = websocket_harness(&server).await;
+    let config = load_default_config_for_test(&harness._codex_home).await;
+    let auth_config = config.auth_config();
+    let manager = codex_login::AuthManager::shared_from_auth_config(auth_config.clone(), true)
+        .await
+        .unwrap();
+    let mut provider = websocket_provider(&server);
+    provider.requires_openai_auth = true;
+    harness.client = ModelClient::new(
+        Some(manager.clone()),
+        AgentIdentityAuthPolicy::JwtOnly,
+        harness.thread_id,
+        provider,
+        SessionSource::Exec,
+        "test".into(),
+        None,
+        false,
+        false,
+        false,
+        None,
+        false,
+        None,
+        config.http_client_factory(),
+    );
+    let mut session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+    stream_until_complete(&mut session, &harness, &prompt).await;
+    auth_config
+        .import_auth_json(native_auth("a", "token-a-new").as_slice())
+        .await
+        .unwrap();
+    stream_until_complete(&mut session, &harness, &prompt).await;
+    assert_eq!(server.handshakes().len(), 1);
+    auth_config
+        .import_auth_json(native_auth("b", "token-b").as_slice())
+        .await
+        .unwrap();
+    stream_until_complete(&mut session, &harness, &prompt).await;
+    let connections = server.connections();
+    assert_eq!(
+        connections.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+    assert!(connections[1][0].body_json()["previous_response_id"].is_null());
+    assert_eq!(
+        server.handshakes()[1].header("authorization"),
+        Some("Bearer token-b".into())
+    );
+    assert_eq!(
+        server.handshakes()[1].header("chatgpt-account-id"),
+        Some("b".into())
+    );
+    // Explicit custom provider auth must never inherit the shared account's headers.
+    let custom_server = start_websocket_server(vec![vec![vec![ev_completed("custom")]]]).await;
+    let mut custom_provider = websocket_provider(&custom_server);
+    custom_provider.auth = Some(codex_protocol::config_types::ModelProviderAuthInfo {
+        command: "/bin/sh".into(),
+        args: vec!["-c".into(), "printf custom-token".into()],
+        timeout_ms: std::num::NonZeroU64::new(5_000).unwrap(),
+        refresh_interval_ms: 300_000,
+        cwd: harness._codex_home.path().to_path_buf().try_into().unwrap(),
+    });
+    let custom_client = ModelClient::new(
+        Some(manager.clone()),
+        AgentIdentityAuthPolicy::JwtOnly,
+        harness.thread_id,
+        custom_provider,
+        SessionSource::Exec,
+        "test".into(),
+        None,
+        false,
+        false,
+        false,
+        None,
+        false,
+        None,
+        config.http_client_factory(),
+    );
+    stream_until_complete(&mut custom_client.new_session(), &harness, &prompt).await;
+    let custom_handshake = custom_server.single_handshake();
+    assert_eq!(
+        custom_handshake.header("authorization"),
+        Some("Bearer custom-token".into())
+    );
+    assert_eq!(custom_handshake.header("chatgpt-account-id"), None);
+    custom_server.shutdown().await;
+    std::fs::remove_file(root.join("auth.json")).unwrap();
+    let metadata = turn_metadata(&harness, None);
+    assert!(
+        session
+            .stream(
+                &prompt,
+                &harness.model_info,
+                &harness.session_telemetry,
+                harness.effort.clone(),
+                harness.summary,
+                None,
+                &metadata,
+                &InferenceTraceContext::disabled()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(server.connections().iter().map(Vec::len).sum::<usize>(), 3);
+    server.shutdown().await;
+}

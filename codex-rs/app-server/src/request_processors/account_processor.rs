@@ -423,12 +423,19 @@ impl AccountRequestProcessor {
             }
         }
 
-        match login_with_api_key(
-            &self.config.codex_home,
-            &params.api_key,
-            self.config.cli_auth_credentials_store_mode,
-            self.config.auth_keyring_backend_kind(),
-        ) {
+        let config = Arc::clone(&self.config);
+        let api_key = params.api_key.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            login_with_api_key(
+                &config.codex_home,
+                &api_key,
+                config.cli_auth_credentials_store_mode,
+                config.auth_keyring_backend_kind(),
+            )
+        })
+        .await
+        .map_err(|err| internal_error(format!("failed to save api key: {err}")))?;
+        match saved {
             Ok(()) => {
                 self.auth_manager.reload().await;
                 self.config_manager.clear_cloud_config_bundle_loader();
@@ -498,13 +505,15 @@ impl AccountRequestProcessor {
             )
             .await?;
 
-            match credentials {
+            let config = Arc::clone(&self.config);
+            let region = region.to_string();
+            tokio::task::spawn_blocking(move || match credentials {
                 BedrockLoginCredentials::ApiKey(api_key) => login_with_bedrock_api_key(
-                    &self.config.codex_home,
+                    &config.codex_home,
                     api_key.trim(),
-                    region,
-                    self.config.cli_auth_credentials_store_mode,
-                    self.config.auth_keyring_backend_kind(),
+                    &region,
+                    config.cli_auth_credentials_store_mode,
+                    config.auth_keyring_backend_kind(),
                 ),
                 BedrockLoginCredentials::AccessKeys {
                     access_key_id,
@@ -516,15 +525,17 @@ impl AccountRequestProcessor {
                         .map(str::trim)
                         .filter(|token| !token.is_empty());
                     login_with_bedrock_access_keys(
-                        &self.config.codex_home,
+                        &config.codex_home,
                         access_key_id.trim(),
                         secret_access_key.trim(),
                         session_token,
-                        self.config.cli_auth_credentials_store_mode,
-                        self.config.auth_keyring_backend_kind(),
+                        config.cli_auth_credentials_store_mode,
+                        config.auth_keyring_backend_kind(),
                     )
                 }
-            }
+            })
+            .await
+            .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
             self.auth_manager.reload().await;
             self.config_manager.clear_cloud_config_bundle_loader();
@@ -1112,6 +1123,9 @@ impl AccountRequestProcessor {
         self.refresh_token_if_requested(do_refresh).await;
 
         let config = self.load_latest_config().await;
+        if self.auth_manager.uses_shared_auth() {
+            self.auth_manager.reload().await;
+        }
         let provider =
             create_model_provider(config.model_provider, Some(self.auth_manager.clone()));
         let account_state = match provider.account_state() {

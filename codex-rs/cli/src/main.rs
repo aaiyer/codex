@@ -15,6 +15,7 @@ use codex_cli::read_api_key_from_stdin;
 use codex_cli::run_login_status;
 use codex_cli::run_login_with_access_token;
 use codex_cli::run_login_with_api_key;
+use codex_cli::run_login_with_auth_json;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
 use codex_cli::run_logout;
@@ -502,6 +503,9 @@ struct LoginCommand {
         help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
     )]
     with_api_key: bool,
+
+    #[arg(long, conflicts_with_all = ["with_api_key", "with_access_token", "use_device_code", "api_key"], help = "Import native auth JSON from stdin (maximum 1 MiB)")]
+    with_auth_json: bool,
 
     #[arg(
         long = "with-access-token",
@@ -1593,7 +1597,9 @@ async fn cli_main(
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    if login_cli.with_api_key && login_cli.with_access_token {
+                    if login_cli.with_auth_json {
+                        run_login_with_auth_json(login_cli.config_overrides).await;
+                    } else if login_cli.with_api_key && login_cli.with_access_token {
                         eprintln!(
                             "Choose one login credential source: --with-api-key or --with-access-token."
                         );

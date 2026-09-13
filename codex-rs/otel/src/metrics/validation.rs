@@ -23,21 +23,25 @@ pub(crate) fn validate_metric_name(name: &str) -> Result<()> {
 }
 
 pub(crate) fn validate_tag_key(key: &str) -> Result<()> {
-    validate_tag_component(key, "tag key")?;
+    validate_tag_component(key, "tag key", is_tag_char)?;
     Ok(())
 }
 
 pub(crate) fn validate_tag_value(value: &str) -> Result<()> {
-    validate_tag_component(value, "tag value")
+    validate_tag_component(value, "tag value", |c| is_tag_char(c) || c == '+')
 }
 
-fn validate_tag_component(value: &str, label: &str) -> Result<()> {
+fn validate_tag_component(
+    value: &str,
+    label: &str,
+    is_valid_char: impl Fn(char) -> bool,
+) -> Result<()> {
     if value.is_empty() {
         return Err(MetricsError::EmptyTagComponent {
             label: label.to_string(),
         });
     }
-    if !value.chars().all(is_tag_char) {
+    if !value.chars().all(is_valid_char) {
         return Err(MetricsError::InvalidTagComponent {
             label: label.to_string(),
             value: value.to_string(),

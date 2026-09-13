@@ -149,7 +149,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.154.0"
+version = "0.154.0+aaiyer.1"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
@@ -562,6 +562,10 @@ unnecessary_lazy_evaluations = "deny"
 unnecessary_sort_by = "deny"
 unnecessary_to_owned = "deny"
 unwrap_used = "deny"
+
+[workspace.metadata.aaiyer]
+upstream-tag = "rust-v0.154.0"
+upstream-commit = "6b9826e3aa83b1a5947db50f4332cb9c65f1b340"
 
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
