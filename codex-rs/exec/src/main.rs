@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Entry-point for the `codex-exec` binary.
 //!
 //! When this CLI is invoked normally, it parses the standard `codex-exec` CLI
