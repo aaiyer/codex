@@ -67,9 +67,9 @@ The [fork release workflow](.github/workflows/aaiyer-release.yml) runs only in
 `ubuntu-24.04` and `ubuntu-24.04-arm` runners, Rust 1.95.0, Zig 0.14.0, and
 Python 3.12.9. It reuses upstream's musl build setup and canonical package
 builder, including checksum-verified V8, ripgrep and zsh resources. Bundled
-`bwrap` is finalized and hashed before building the CLI. Targeted Rust tests,
-package unit tests, and smoke checks of the extracted archive gate publication
-on both architectures. The workflow creates a draft release, checks GitHub's
+`bwrap` is finalized and hashed before building the CLI. The complete Rust
+workspace suite on each musl release target, package unit tests, and smoke checks
+of the extracted archive gate publication on both architectures. The workflow creates a draft release, checks GitHub's
 uploaded asset digests, then publishes it. It uses only the repository's
 `GITHUB_TOKEN`; it requires no OpenAI signing, internal runners, or release
 storage credentials. Before building, it verifies the recorded upstream tag is

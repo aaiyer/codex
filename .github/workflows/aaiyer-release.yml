@@ -138,7 +138,7 @@ jobs:
           cargo build --locked --release --target "$TARGET" --bin bwrap
           strip --strip-debug --strip-unneeded "target/$TARGET/release/bwrap"
           echo "CODEX_BWRAP_SHA256=$(sha256sum "target/$TARGET/release/bwrap" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
-      - name: Test fork packages
+      - name: Test complete workspace on the release target
         env:
           PYTHON: ${{ steps.python.outputs.python-path }}
         shell: bash
@@ -146,9 +146,7 @@ jobs:
           set -euo pipefail
           just --shell "$PYTHON" --shell-arg -c \
             --shell-arg 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")' \
-            --set python "$PYTHON" test --locked --release --target "$TARGET" \
-            -p codex-login -p codex-model-provider -p codex-cli -p codex-otel -p codex-core -p codex-app-server \
-            -E 'package(codex-login) | package(codex-model-provider) | package(codex-cli) | package(codex-otel) | (package(codex-core) & (test(client_websockets) | test(client::tests::shared_websocket_generation_stays_bound_to_resolved_credentials))) | (package(codex-app-server) & test(account_read_reloads_shared_replacement_and_logout_without_oauth))'
+            --set python "$PYTHON" test --locked --release --target "$TARGET" --test-threads=4
       - name: Build release binaries
         working-directory: codex-rs
         shell: bash
