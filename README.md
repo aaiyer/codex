@@ -69,8 +69,9 @@ Python 3.12.9. It reuses upstream's musl build setup and canonical package
 builder, including checksum-verified V8, ripgrep and zsh resources. Bundled
 `bwrap` is finalized and hashed before building the CLI. The release workflow runs
 only the fork's affected auth regression packages on each musl target
-(`codex-login`, `codex-model-provider`, `codex-cli`, and `codex-core`) with
-Cargo's unoptimized `ci-test` profile. It uses four build jobs, disables
+(`codex-login`, `codex-model-provider`, `codex-cli`, `codex-core`,
+`codex-app-server` account tests, and `codex-otel` validation tests) with Cargo's
+unoptimized `ci-test` profile. It uses four build jobs, disables
 incremental artifacts and debug info, and builds the runtime sandbox helper once
 to keep release disk and wall time bounded. The full upstream workspace suite
 belongs to full CI; package unit tests and extracted-archive smoke checks gate
