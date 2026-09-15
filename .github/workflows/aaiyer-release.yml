@@ -34,7 +34,9 @@ jobs:
       TARGET: ${{ matrix.target }}
       CODEX_REPO_ROOT: ${{ github.workspace }}
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      CARGO_BUILD_JOBS: "2"
+      CARGO_BUILD_JOBS: "4"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
       AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
     steps:
@@ -145,15 +147,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --locked --profile ci-test --target "$TARGET" --timings \
-            --bin codex-linux-sandbox --bin bwrap
-      - name: Compile complete workspace tests on the release target
-        working-directory: codex-rs
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo nextest list --locked --workspace --cargo-profile ci-test \
-            --target "$TARGET" --list-type binaries-only --timings
-      - name: Run complete workspace tests on the release target
+            --bin codex-linux-sandbox
+      - name: Run shared-auth regression packages on the release target
         env:
           PYTHON: ${{ steps.python.outputs.python-path }}
         shell: bash
@@ -164,8 +159,9 @@ jobs:
             "CARGO_BIN_EXE_codex_linux_sandbox=$sandbox_helper" \
             just --shell "$PYTHON" --shell-arg -c \
             --shell-arg 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")' \
-            --set python "$PYTHON" test --locked --workspace --cargo-profile ci-test \
-            --target "$TARGET" --test-threads=4
+            --set python "$PYTHON" test --locked --cargo-profile ci-test \
+            --target "$TARGET" --test-threads=4 \
+            -p codex-login -p codex-model-provider -p codex-cli -p codex-core
       - name: Build and bind bundled sandbox
         working-directory: codex-rs
         shell: bash

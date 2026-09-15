@@ -67,17 +67,20 @@ The [fork release workflow](.github/workflows/aaiyer-release.yml) runs only in
 `ubuntu-24.04` and `ubuntu-24.04-arm` runners, Rust 1.95.0, Zig 0.14.0, and
 Python 3.12.9. It reuses upstream's musl build setup and canonical package
 builder, including checksum-verified V8, ripgrep and zsh resources. Bundled
-`bwrap` is finalized and hashed before building the CLI. The complete Rust
-workspace suite on each musl release target uses upstream's unoptimized `ci-test`
-Cargo profile, with separate compilation and execution steps and matching runtime
-sandbox helpers. Tests run before the release-only `bwrap` digest is set; release
-optimization is reserved for the shipped CLI, code-mode host and `bwrap`. Cargo
-build timings and nextest JUnit results are uploaded even when a check fails, if
-those files were produced. A download-only Cargo cache reduces registry and Git
-fetches on same-tag retries; compiled artifacts and native dependencies are not
-cached. GitHub isolates tag caches, so new release tags still compile cold.
-The complete workspace suite, package unit tests, and smoke checks of the
-extracted archive gate publication on both architectures. The workflow creates a
+`bwrap` is finalized and hashed before building the CLI. The release workflow runs
+only the fork's affected auth regression packages on each musl target
+(`codex-login`, `codex-model-provider`, `codex-cli`, and `codex-core`) with
+Cargo's unoptimized `ci-test` profile. It uses four build jobs, disables
+incremental artifacts and debug info, and builds the runtime sandbox helper once
+to keep release disk and wall time bounded. The full upstream workspace suite
+belongs to full CI; package unit tests and extracted-archive smoke checks gate
+publication here. Tests run before the release-only `bwrap` digest is set;
+release optimization is reserved for the shipped CLI, code-mode host and
+`bwrap`. Cargo build timings and nextest JUnit results are uploaded when
+produced. A download-only Cargo cache reduces registry and Git fetches on
+same-tag retries; compiled artifacts and native dependencies are not cached.
+GitHub isolates tag caches, so new release tags still compile cold.
+The workflow creates a
 draft release, checks GitHub's
 uploaded asset digests, then publishes it. It uses only the repository's
 `GITHUB_TOKEN`; it requires no OpenAI signing, internal runners, or release
