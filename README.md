@@ -4,7 +4,7 @@ This is a maintained fork of [OpenAI Codex](https://github.com/openai/codex).
 The current upstream tag and exact commit are recorded in
 `[workspace.metadata.aaiyer]` in [codex-rs/Cargo.toml](codex-rs/Cargo.toml).
 Fork versions use `X.Y.Z+aaiyer.N` and tags use `rust-vX.Y.Z+aaiyer.N`;
-the initial release is `0.154.0+aaiyer.4`. These are **aaiyer builds**, not
+the initial release is `0.154.0+aaiyer.5`. These are **aaiyer builds**, not
 OpenAI releases.
 
 The maintained patches provide native shared authentication, preserve SemVer
@@ -68,8 +68,17 @@ The [fork release workflow](.github/workflows/aaiyer-release.yml) runs only in
 Python 3.12.9. It reuses upstream's musl build setup and canonical package
 builder, including checksum-verified V8, ripgrep and zsh resources. Bundled
 `bwrap` is finalized and hashed before building the CLI. The complete Rust
-workspace suite on each musl release target, package unit tests, and smoke checks
-of the extracted archive gate publication on both architectures. The workflow creates a draft release, checks GitHub's
+workspace suite on each musl release target uses upstream's unoptimized `ci-test`
+Cargo profile, with separate compilation and execution steps and matching runtime
+sandbox helpers. Tests run before the release-only `bwrap` digest is set; release
+optimization is reserved for the shipped CLI, code-mode host and `bwrap`. Cargo
+build timings and nextest JUnit results are uploaded even when a check fails, if
+those files were produced. A download-only Cargo cache reduces registry and Git
+fetches on same-tag retries; compiled artifacts and native dependencies are not
+cached. GitHub isolates tag caches, so new release tags still compile cold.
+The complete workspace suite, package unit tests, and smoke checks of the
+extracted archive gate publication on both architectures. The workflow creates a
+draft release, checks GitHub's
 uploaded asset digests, then publishes it. It uses only the repository's
 `GITHUB_TOKEN`; it requires no OpenAI signing, internal runners, or release
 storage credentials. Before building, it verifies the recorded upstream tag is
@@ -148,7 +157,7 @@ may still have `origin` pointing to `openai/codex`.
    ```sh
    git push --force-with-lease="refs/heads/aaiyer/shared-auth:$expected_remote_head" \
      https://github.com/aaiyer/codex.git HEAD:refs/heads/aaiyer/shared-auth
-   # Set fork_version to the exact workspace version, e.g. 0.154.0+aaiyer.4.
+   # Set fork_version to the exact workspace version, e.g. 0.154.0+aaiyer.5.
    git tag -a "rust-v$fork_version" -m "aaiyer Codex $fork_version"
    git push https://github.com/aaiyer/codex.git "rust-v$fork_version"
    ```

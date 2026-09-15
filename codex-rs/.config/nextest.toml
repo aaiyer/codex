@@ -9,7 +9,6 @@ retries = 1
 path = "junit.xml"
 
 [profile.local]
-inherits = "default"
 
 [test-groups.app_server_protocol_codegen]
 max-threads = 1

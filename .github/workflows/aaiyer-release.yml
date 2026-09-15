@@ -108,6 +108,15 @@ jobs:
         with:
           version: 0.14.0
           use-cache: false
+      - name: Restore Cargo downloads for same-tag retries
+        id: cargo-downloads
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: fork-cargo-downloads-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock') }}
       - name: Install musl build tools
         run: bash .github/scripts/install-musl-build-tools.sh
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
@@ -130,15 +139,14 @@ jobs:
               for key, value in resolve_codex_v8_cargo_env(TARGET_SPECS[os.environ["TARGET"]]).items():
                   output.write(f"{key}={value}\n")
           PY
-      - name: Build and bind bundled sandbox
+      - name: Build runtime test helpers
         working-directory: codex-rs
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --locked --release --target "$TARGET" --bin bwrap
-          strip --strip-debug --strip-unneeded "target/$TARGET/release/bwrap"
-          echo "CODEX_BWRAP_SHA256=$(sha256sum "target/$TARGET/release/bwrap" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
-      - name: Test complete workspace on the release target
+          cargo build --locked --profile ci-test --target "$TARGET" --timings \
+            --bin codex-linux-sandbox --bin bwrap
+      - name: Compile complete workspace tests on the release target
         env:
           PYTHON: ${{ steps.python.outputs.python-path }}
         shell: bash
@@ -146,13 +154,35 @@ jobs:
           set -euo pipefail
           just --shell "$PYTHON" --shell-arg -c \
             --shell-arg 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")' \
-            --set python "$PYTHON" test --locked --release --target "$TARGET" --test-threads=4
+            --set python "$PYTHON" test --locked --workspace --cargo-profile ci-test \
+            --target "$TARGET" --no-run --timings
+      - name: Run complete workspace tests on the release target
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox_helper="$GITHUB_WORKSPACE/codex-rs/target/$TARGET/ci-test/codex-linux-sandbox"
+          env "CARGO_BIN_EXE_codex-linux-sandbox=$sandbox_helper" \
+            "CARGO_BIN_EXE_codex_linux_sandbox=$sandbox_helper" \
+            just --shell "$PYTHON" --shell-arg -c \
+            --shell-arg 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")' \
+            --set python "$PYTHON" test --locked --workspace --cargo-profile ci-test \
+            --target "$TARGET" --test-threads=4
+      - name: Build and bind bundled sandbox
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "$TARGET" --bin bwrap --timings
+          strip --strip-debug --strip-unneeded "target/$TARGET/release/bwrap"
+          echo "CODEX_BWRAP_SHA256=$(sha256sum "target/$TARGET/release/bwrap" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
       - name: Build release binaries
         working-directory: codex-rs
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --locked --release --target "$TARGET" --bin codex --bin codex-code-mode-host
+          cargo build --locked --release --target "$TARGET" --bin codex --bin codex-code-mode-host --timings
           strip --strip-debug --strip-unneeded "target/$TARGET/release/codex" "target/$TARGET/release/codex-code-mode-host"
       - name: Package and smoke test exact release bytes
         env:
@@ -181,6 +211,26 @@ jobs:
           name: package-${{ matrix.target }}
           path: dist/codex-package-${{ matrix.target }}.tar.gz
           if-no-files-found: error
+
+      - name: Upload build timings and test results
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-checks-${{ matrix.target }}
+          path: |
+            codex-rs/target/**/cargo-timings/*.html
+            codex-rs/target/nextest/local/junit.xml
+          if-no-files-found: warn
+      - name: Save Cargo downloads for same-tag retries
+        if: always() && !cancelled() && steps.cargo-downloads.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ steps.cargo-downloads.outputs.cache-primary-key }}
 
   publish:
     needs: build
