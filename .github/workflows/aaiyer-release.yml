@@ -175,7 +175,7 @@ jobs:
             -p codex-app-server --test all account
           cargo nextest run --locked --profile local --cargo-profile ci-test \
             --target "$TARGET" --test-threads=4 \
-            -p codex-otel --test validation
+            -p codex-otel --test tests validation
       - name: Build and bind bundled sandbox
         working-directory: codex-rs
         shell: bash
