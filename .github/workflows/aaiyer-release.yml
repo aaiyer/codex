@@ -125,6 +125,8 @@ jobs:
         with:
           tool: just@1.51.0,cargo-nextest@0.9.103
       - name: Verify V8 resources and package tests
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
         shell: bash
         run: |
           set -euo pipefail
@@ -147,8 +149,6 @@ jobs:
           cargo build --locked --profile ci-test --target "$TARGET" --timings \
             --bin codex-linux-sandbox
       - name: Run shared-auth regression packages on the release target
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
         shell: bash
         run: |
           set -euo pipefail
