@@ -149,6 +149,7 @@ jobs:
           cargo build --locked --profile ci-test --target "$TARGET" --timings \
             --bin codex-linux-sandbox
       - name: Run shared-auth regression packages on the release target
+        working-directory: codex-rs
         shell: bash
         run: |
           set -euo pipefail
