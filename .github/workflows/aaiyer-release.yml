@@ -125,8 +125,6 @@ jobs:
         with:
           tool: just@1.51.0,cargo-nextest@0.9.103
       - name: Verify V8 resources and package tests
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
         shell: bash
         run: |
           set -euo pipefail
@@ -154,14 +152,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sandbox_helper="$GITHUB_WORKSPACE/codex-rs/target/$TARGET/ci-test/codex-linux-sandbox"
-          env "CARGO_BIN_EXE_codex-linux-sandbox=$sandbox_helper" \
-            "CARGO_BIN_EXE_codex_linux_sandbox=$sandbox_helper" \
-            just --shell "$PYTHON" --shell-arg -c \
-            --shell-arg 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")' \
-            --set python "$PYTHON" test --locked --cargo-profile ci-test \
+          cargo nextest run --locked --profile local --cargo-profile ci-test \
             --target "$TARGET" --test-threads=4 \
-            -p codex-login -p codex-model-provider -p codex-cli -p codex-core
+            -p codex-login
+          cargo nextest run --locked --profile local --cargo-profile ci-test \
+            --target "$TARGET" --test-threads=4 \
+            -p codex-model-provider
+          cargo nextest run --locked --profile local --cargo-profile ci-test \
+            --target "$TARGET" --test-threads=4 \
+            -p codex-cli --test login
+          cargo nextest run --locked --profile local --cargo-profile ci-test \
+            --target "$TARGET" --test-threads=4 \
+            -p codex-core --test all shared_auth
       - name: Run app-server account and telemetry regressions
         working-directory: codex-rs
         shell: bash
