@@ -147,15 +147,12 @@ jobs:
           cargo build --locked --profile ci-test --target "$TARGET" --timings \
             --bin codex-linux-sandbox --bin bwrap
       - name: Compile complete workspace tests on the release target
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
+        working-directory: codex-rs
         shell: bash
         run: |
           set -euo pipefail
-          just --shell "$PYTHON" --shell-arg -c \
-            --shell-arg 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")' \
-            --set python "$PYTHON" test --locked --workspace --cargo-profile ci-test \
-            --target "$TARGET" --no-run --timings
+          cargo nextest list --locked --workspace --cargo-profile ci-test \
+            --target "$TARGET" --list-type binaries-only --timings
       - name: Run complete workspace tests on the release target
         env:
           PYTHON: ${{ steps.python.outputs.python-path }}
