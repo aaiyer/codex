@@ -162,6 +162,20 @@ jobs:
             --set python "$PYTHON" test --locked --cargo-profile ci-test \
             --target "$TARGET" --test-threads=4 \
             -p codex-login -p codex-model-provider -p codex-cli -p codex-core
+      - name: Run app-server account and telemetry regressions
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox_helper="$GITHUB_WORKSPACE/codex-rs/target/$TARGET/ci-test/codex-linux-sandbox"
+          env "CARGO_BIN_EXE_codex-linux-sandbox=$sandbox_helper" \
+            "CARGO_BIN_EXE_codex_linux_sandbox=$sandbox_helper" \
+            cargo nextest run --locked --profile local --cargo-profile ci-test \
+            --target "$TARGET" --test-threads=4 \
+            -p codex-app-server --test all account
+          cargo nextest run --locked --profile local --cargo-profile ci-test \
+            --target "$TARGET" --test-threads=4 \
+            -p codex-otel --test validation
       - name: Build and bind bundled sandbox
         working-directory: codex-rs
         shell: bash
