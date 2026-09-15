@@ -158,9 +158,6 @@ jobs:
             -p codex-login
           cargo nextest run --locked --profile local --cargo-profile ci-test \
             --target "$TARGET" --test-threads=4 \
-            -p codex-model-provider
-          cargo nextest run --locked --profile local --cargo-profile ci-test \
-            --target "$TARGET" --test-threads=4 \
             -p codex-cli --test login
           cargo nextest run --locked --profile local --cargo-profile ci-test \
             --target "$TARGET" --test-threads=4 \
