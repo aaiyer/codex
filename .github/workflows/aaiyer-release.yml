@@ -119,6 +119,15 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
           key: fork-cargo-downloads-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock') }}
+      - name: Restore compiled Cargo target
+        id: cargo-target
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7
+        with:
+          path: codex-rs/target
+          key: fork-cargo-target-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', '.github/workflows/aaiyer-release.yml') }}
+          restore-keys: |
+            fork-cargo-target-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock') }}
+            fork-cargo-target-${{ matrix.target }}-
       - name: Install musl build tools
         run: bash .github/scripts/install-musl-build-tools.sh
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
@@ -213,6 +222,13 @@ jobs:
             codex-rs/target/**/cargo-timings/*.html
             codex-rs/target/nextest/local/junit.xml
           if-no-files-found: warn
+      - name: Save compiled Cargo target
+        if: always() && !cancelled() && steps.cargo-target.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7
+        with:
+          path: codex-rs/target
+          key: ${{ steps.cargo-target.outputs.cache-primary-key }}
       - name: Save Cargo downloads for same-tag retries
         if: always() && !cancelled() && steps.cargo-downloads.outputs.cache-hit != 'true'
         continue-on-error: true
