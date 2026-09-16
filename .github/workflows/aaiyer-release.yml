@@ -130,6 +130,15 @@ jobs:
             fork-cargo-target-${{ matrix.target }}-
       - name: Install musl build tools
         run: bash .github/scripts/install-musl-build-tools.sh
+      - name: Enable Rust compilation cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: v0.10.0
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_CACHE_SIZE: 10G
+      - name: Use sccache for Rust and native compilation
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: just@1.51.0,cargo-nextest@0.9.103
