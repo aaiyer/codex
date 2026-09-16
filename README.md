@@ -4,7 +4,7 @@ This is a maintained fork of [OpenAI Codex](https://github.com/openai/codex).
 The current upstream tag and exact commit are recorded in
 `[workspace.metadata.aaiyer]` in [codex-rs/Cargo.toml](codex-rs/Cargo.toml).
 Fork versions use `X.Y.Z+aaiyer.N` and tags use `rust-vX.Y.Z+aaiyer.N`;
-the initial release is `0.154.0+aaiyer.10`. These are **aaiyer builds**, not
+the initial release is `0.154.0+aaiyer.11`. These are **aaiyer builds**, not
 OpenAI releases.
 
 The maintained patches provide native shared authentication, preserve SemVer
@@ -161,7 +161,7 @@ may still have `origin` pointing to `openai/codex`.
    ```sh
    git push --force-with-lease="refs/heads/aaiyer/shared-auth:$expected_remote_head" \
      https://github.com/aaiyer/codex.git HEAD:refs/heads/aaiyer/shared-auth
-   # Set fork_version to the exact workspace version, e.g. 0.154.0+aaiyer.10.
+   # Set fork_version to the exact workspace version, e.g. 0.154.0+aaiyer.11.
    git tag -a "rust-v$fork_version" -m "aaiyer Codex $fork_version"
    git push https://github.com/aaiyer/codex.git "rust-v$fork_version"
    ```
