@@ -153,11 +153,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sandbox_helper="/codex-rs/target//ci-test/codex-linux-sandbox"
-          env "CARGO_BIN_EXE_codex-linux-sandbox=" \
-            "CARGO_BIN_EXE_codex_linux_sandbox=" \
+          sandbox_helper="$GITHUB_WORKSPACE/codex-rs/target/$TARGET/ci-test/codex-linux-sandbox"
+          env "CARGO_BIN_EXE_codex-linux-sandbox=$sandbox_helper" \
+            "CARGO_BIN_EXE_codex_linux_sandbox=$sandbox_helper" \
             cargo nextest run --locked --profile local --cargo-profile ci-test \
-            --target "" --test-threads=4 \
+            --target "$TARGET" --test-threads=4 \
             -p codex-login -p codex-model-provider -p codex-cli \
             -p codex-core -p codex-app-server -p codex-otel \
             -E 'package(=codex-login) | package(=codex-model-provider) | (package(=codex-cli) & binary(=login)) | (package(=codex-core) & (test(shared_auth) | test(=client::tests::shared_websocket_generation_stays_bound_to_resolved_credentials))) | (package(=codex-app-server) & binary(=all) & test(account)) | (package(=codex-otel) & binary(=tests) & test(validation))'
