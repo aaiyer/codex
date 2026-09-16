@@ -139,9 +139,6 @@ jobs:
           SCCACHE_CACHE_SIZE: 10G
       - name: Use sccache for Rust and native compilation
         run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: just@1.51.0,cargo-nextest@0.9.103
       - name: Verify V8 resources and package tests
         env:
           PYTHON: ${{ steps.python.outputs.python-path }}
@@ -159,26 +156,6 @@ jobs:
               for key, value in resolve_codex_v8_cargo_env(TARGET_SPECS[os.environ["TARGET"]]).items():
                   output.write(f"{key}={value}\n")
           PY
-      - name: Build runtime test helpers
-        working-directory: codex-rs
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo build --locked --profile ci-test --target "$TARGET" --timings \
-            --bin codex-linux-sandbox
-      - name: Run shared-auth regression packages on the release target
-        working-directory: codex-rs
-        shell: bash
-        run: |
-          set -euo pipefail
-          sandbox_helper="$GITHUB_WORKSPACE/codex-rs/target/$TARGET/ci-test/codex-linux-sandbox"
-          env "CARGO_BIN_EXE_codex-linux-sandbox=$sandbox_helper" \
-            "CARGO_BIN_EXE_codex_linux_sandbox=$sandbox_helper" \
-            cargo nextest run --locked --profile local --cargo-profile ci-test \
-            --target "$TARGET" --test-threads=4 \
-            -p codex-login -p codex-model-provider -p codex-cli \
-            -p codex-core -p codex-app-server -p codex-otel \
-            -E 'package(=codex-login) | package(=codex-model-provider) | (package(=codex-cli) & binary(=login)) | (package(=codex-core) & (test(shared_auth) | test(=client::tests::shared_websocket_generation_stays_bound_to_resolved_credentials))) | (package(=codex-app-server) & binary(=all) & test(account)) | (package(=codex-otel) & binary(=tests) & test(validation))'
       - name: Build and bind bundled sandbox
         working-directory: codex-rs
         shell: bash
@@ -222,11 +199,126 @@ jobs:
           path: dist/codex-package-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
-      - name: Upload build timings and test results
+      - name: Upload build timings
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: release-checks-${{ matrix.target }}
+          path: |
+            codex-rs/target/**/cargo-timings/*.html
+          if-no-files-found: warn
+      - name: Save compiled Cargo target
+        if: always() && !cancelled() && steps.cargo-target.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7
+        with:
+          path: codex-rs/target
+          key: ${{ steps.cargo-target.outputs.cache-primary-key }}
+      - name: Save Cargo downloads for same-tag retries
+        if: always() && !cancelled() && steps.cargo-downloads.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ steps.cargo-downloads.outputs.cache-primary-key }}
+
+  regressions:
+    if: github.repository == 'aaiyer/codex'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      CODEX_REPO_ROOT: ${{ github.workspace }}
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_BUILD_JOBS: "4"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        id: python
+        with:
+          python-version: "3.12.9"
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Restore Cargo downloads
+        id: cargo-downloads
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: fork-regression-downloads-${{ hashFiles('codex-rs/Cargo.lock') }}
+      - name: Restore compiled Cargo target
+        id: cargo-target
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7
+        with:
+          path: codex-rs/target
+          key: fork-regression-target-x86_64-unknown-linux-gnu-${{ hashFiles('codex-rs/Cargo.lock', '.github/workflows/aaiyer-release.yml') }}
+          restore-keys: |
+            fork-regression-target-x86_64-unknown-linux-gnu-${{ hashFiles('codex-rs/Cargo.lock') }}
+            fork-regression-target-x86_64-unknown-linux-gnu-
+      - name: Enable Rust compilation cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: v0.10.0
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_CACHE_SIZE: 10G
+      - name: Use sccache for Rust and native compilation
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just@1.51.0,cargo-nextest@0.9.103
+      - name: Prepare verified V8 resources
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON" - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, "scripts")
+          from codex_package.targets import TARGET_SPECS
+          from codex_package.v8 import resolve_codex_v8_cargo_env
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              for key, value in resolve_codex_v8_cargo_env(TARGET_SPECS[os.environ["TARGET"]]).items():
+                  output.write(f"{key}={value}\n")
+          PY
+      - name: Build runtime test helper
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --profile ci-test --timings --bin codex-linux-sandbox
+      - name: Run shared-auth regression packages
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox_helper="$GITHUB_WORKSPACE/codex-rs/target/ci-test/codex-linux-sandbox"
+          env "CARGO_BIN_EXE_codex-linux-sandbox=$sandbox_helper" \
+            "CARGO_BIN_EXE_codex_linux_sandbox=$sandbox_helper" \
+            cargo nextest run --locked --profile local --cargo-profile ci-test \
+            --test-threads=4 \
+            -p codex-login -p codex-model-provider -p codex-cli \
+            -p codex-core -p codex-app-server -p codex-otel \
+            -E 'package(=codex-login) | package(=codex-model-provider) | (package(=codex-cli) & binary(=login)) | (package(=codex-core) & (test(shared_auth) | test(=client::tests::shared_websocket_generation_stays_bound_to_resolved_credentials))) | (package(=codex-app-server) & binary(=all) & test(account)) | (package(=codex-otel) & binary(=tests) & test(validation))'
+      - name: Upload regression timings and results
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: regression-checks
           path: |
             codex-rs/target/**/cargo-timings/*.html
             codex-rs/target/nextest/local/junit.xml
@@ -250,7 +342,7 @@ jobs:
           key: ${{ steps.cargo-downloads.outputs.cache-primary-key }}
 
   publish:
-    needs: build
+    needs: [build, regressions]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

@@ -4,7 +4,7 @@ This is a maintained fork of [OpenAI Codex](https://github.com/openai/codex).
 The current upstream tag and exact commit are recorded in
 `[workspace.metadata.aaiyer]` in [codex-rs/Cargo.toml](codex-rs/Cargo.toml).
 Fork versions use `X.Y.Z+aaiyer.N` and tags use `rust-vX.Y.Z+aaiyer.N`;
-the initial release is `0.154.0+aaiyer.15`. These are **aaiyer builds**, not
+the initial release is `0.154.0+aaiyer.16`. These are **aaiyer builds**, not
 OpenAI releases.
 
 The maintained patches provide native shared authentication, preserve SemVer
@@ -68,19 +68,17 @@ The [fork release workflow](.github/workflows/aaiyer-release.yml) runs only in
 Python 3.12.9. It reuses upstream's musl build setup and canonical package
 builder, including checksum-verified V8, ripgrep and zsh resources. Bundled
 `bwrap` is finalized and hashed before building the CLI. The release workflow runs
-only the fork's affected auth regression packages on each musl target
-(`codex-login`, `codex-model-provider`, `codex-cli`, `codex-core`,
-`codex-app-server` account tests, and `codex-otel` validation tests) with Cargo's
-unoptimized `ci-test` profile. It uses four build jobs, disables
-incremental artifacts and debug info, and builds the runtime sandbox helper once
-to keep release disk and wall time bounded. The full upstream workspace suite
-belongs to full CI; package unit tests and extracted-archive smoke checks gate
-publication here. Tests run before the release-only `bwrap` digest is set;
-release optimization is reserved for the shipped CLI, code-mode host and
-`bwrap`. Cargo build timings and nextest JUnit results are uploaded when
-produced. A download-only Cargo cache reduces registry and Git fetches on
-same-tag retries; compiled artifacts and native dependencies are not cached.
-GitHub isolates tag caches, so new release tags still compile cold.
+the fork's affected auth regressions once on native x86_64 GNU/Linux
+(`codex-login`, `codex-model-provider`, CLI login tests, core shared-auth tests,
+app-server account tests, and telemetry validation tests), using Cargo's
+unoptimized `ci-test` profile. Separate x86_64 and ARM64 musl jobs build the
+optimized CLI, code-mode host and `bwrap`, then smoke-test the exact packaged
+bytes. Publication requires both package jobs and the regression job to pass.
+The jobs use four compiler workers, disable incremental compilation and debug
+info, and retain Cargo timings and test results. Cargo downloads, compiled
+target directories and sccache reduce repeat work within GitHub's cache scope;
+new release tags may still build cold. The full upstream workspace suite is
+outside this bounded release gate.
 The workflow creates a
 draft release, checks GitHub's
 uploaded asset digests, then publishes it. It uses only the repository's
@@ -161,7 +159,7 @@ may still have `origin` pointing to `openai/codex`.
    ```sh
    git push --force-with-lease="refs/heads/aaiyer/shared-auth:$expected_remote_head" \
      https://github.com/aaiyer/codex.git HEAD:refs/heads/aaiyer/shared-auth
-   # Set fork_version to the exact workspace version, e.g. 0.154.0+aaiyer.15.
+   # Set fork_version to the exact workspace version, e.g. 0.154.0+aaiyer.16.
    git tag -a "rust-v$fork_version" -m "aaiyer Codex $fork_version"
    git push https://github.com/aaiyer/codex.git "rust-v$fork_version"
    ```
