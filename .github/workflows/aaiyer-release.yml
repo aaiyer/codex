@@ -153,29 +153,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo nextest run --locked --profile local --cargo-profile ci-test \
-            --target "$TARGET" --test-threads=4 \
-            -p codex-login
-          cargo nextest run --locked --profile local --cargo-profile ci-test \
-            --target "$TARGET" --test-threads=4 \
-            -p codex-cli --test login
-          cargo nextest run --locked --profile local --cargo-profile ci-test \
-            --target "$TARGET" --test-threads=4 \
-            -p codex-core --test all shared_auth
-      - name: Run app-server account and telemetry regressions
-        working-directory: codex-rs
-        shell: bash
-        run: |
-          set -euo pipefail
-          sandbox_helper="$GITHUB_WORKSPACE/codex-rs/target/$TARGET/ci-test/codex-linux-sandbox"
-          env "CARGO_BIN_EXE_codex-linux-sandbox=$sandbox_helper" \
-            "CARGO_BIN_EXE_codex_linux_sandbox=$sandbox_helper" \
+          sandbox_helper="/codex-rs/target//ci-test/codex-linux-sandbox"
+          env "CARGO_BIN_EXE_codex-linux-sandbox=" \
+            "CARGO_BIN_EXE_codex_linux_sandbox=" \
             cargo nextest run --locked --profile local --cargo-profile ci-test \
-            --target "$TARGET" --test-threads=4 \
-            -p codex-app-server --test all account
-          cargo nextest run --locked --profile local --cargo-profile ci-test \
-            --test-threads=4 \
-            -p codex-otel --test tests validation
+            --target "" --test-threads=4 \
+            -p codex-login -p codex-model-provider -p codex-cli \
+            -p codex-core -p codex-app-server -p codex-otel \
+            -E 'package(=codex-login) | package(=codex-model-provider) | (package(=codex-cli) & binary(=login)) | (package(=codex-core) & (test(shared_auth) | test(=client::tests::shared_websocket_generation_stays_bound_to_resolved_credentials))) | (package(=codex-app-server) & binary(=all) & test(account)) | (package(=codex-otel) & binary(=tests) & test(validation))'
       - name: Build and bind bundled sandbox
         working-directory: codex-rs
         shell: bash
